@@ -1,0 +1,149 @@
+import urllib.request
+import json
+
+def get_data():
+    url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=120"
+    data = json.loads(urllib.request.urlopen(url).read())
+    
+    closes = [float(x[4]) for x in data]
+    opens = [float(x[1]) for x in data]
+    highs = [float(x[2]) for x in data]
+    lows = [float(x[3]) for x in data]
+    volumes = [float(x[5]) for x in data]
+    
+    return opens, highs, lows, closes, volumes
+
+
+def ema(data, period):
+    ema_values = []
+    k = 2 / (period + 1)
+    ema_values.append(data[0])
+    
+    for price in data[1:]:
+        ema_values.append(price * k + ema_values[-1] * (1 - k))
+    
+    return ema_values
+
+
+def rsi(data, period=7):
+    gains, losses = [], []
+    
+    for i in range(1, len(data)):
+        diff = data[i] - data[i-1]
+        gains.append(max(diff, 0))
+        losses.append(abs(min(diff, 0)))
+    
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period if sum(losses[-period:]) != 0 else 1
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def scan():
+    opens, highs, lows, closes, volumes = get_data()
+    
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    ema50 = ema(closes, 50)
+    
+    current_rsi = rsi(closes)
+    
+    avg_vol = sum(volumes[-20:]) / 20
+    current_vol = volumes[-1]
+    
+    last_close = closes[-1]
+    last_open = opens[-1]
+    prev_close = closes[-2]
+    prev_high = highs[-2]
+    prev_low = lows[-2]
+
+    # -----------------------------
+    # SCORING SYSTEM
+    # -----------------------------
+    up_score = 0
+    down_score = 0
+    reasons = []
+
+    # 1. Trend (strong weight)
+    if ema9[-1] > ema21[-1] > ema50[-1]:
+        up_score += 3
+        reasons.append("Uptrend")
+    elif ema9[-1] < ema21[-1] < ema50[-1]:
+        down_score += 3
+        reasons.append("Downtrend")
+
+    # 2. RSI Momentum
+    if current_rsi > 55:
+        up_score += 2
+        reasons.append("Bullish RSI")
+    elif current_rsi < 45:
+        down_score += 2
+        reasons.append("Bearish RSI")
+
+    # 3. Volume spike
+    if current_vol > avg_vol:
+        if last_close > last_open:
+            up_score += 2
+            reasons.append("Bullish volume")
+        else:
+            down_score += 2
+            reasons.append("Bearish volume")
+
+    # 4. Short-term momentum (last candle)
+    if last_close > prev_close:
+        up_score += 1
+    else:
+        down_score += 1
+
+    # 5. Breakout logic
+    if last_close > prev_high:
+        up_score += 2
+        reasons.append("Breakout")
+    elif last_close < prev_low:
+        down_score += 2
+        reasons.append("Breakdown")
+
+    # 6. Fake breakout reversal
+    if highs[-1] > prev_high and last_close < last_open:
+        down_score += 2
+        reasons.append("Fake breakout")
+    elif lows[-1] < prev_low and last_close > last_open:
+        up_score += 2
+        reasons.append("Fake breakdown")
+
+    # -----------------------------
+    # PROBABILITY CALCULATION
+    # -----------------------------
+    total = up_score + down_score
+
+    if total == 0:
+        up_prob = down_prob = 50
+    else:
+        up_prob = round((up_score / total) * 100, 2)
+        down_prob = round((down_score / total) * 100, 2)
+
+    signal = "UP" if up_prob > down_prob else "DOWN"
+
+    # Targets
+    if signal == "UP":
+        target = round(last_close * 1.002, 2)
+    else:
+        target = round(last_close * 0.998, 2)
+
+    # -----------------------------
+    # OUTPUT
+    # -----------------------------
+    print("\n===== BTC PRO SCANNER =====")
+    print(f"Market Price : {round(last_close, 2)}")
+    print(f"Signal       : {signal}")
+    print(f"UP Prob      : {up_prob}%")
+    print(f"DOWN Prob    : {down_prob}%")
+    print(f"RSI          : {round(current_rsi, 2)}")
+    print(f"Volume       : {'High' if current_vol > avg_vol else 'Low'}")
+    print(f"Reason       : {', '.join(reasons)}")
+    print(f"Target Price : {target}")
+    print("================================\n")
+
+
+scan()
